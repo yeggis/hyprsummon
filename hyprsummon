@@ -1,0 +1,514 @@
+#!/usr/bin/env bash
+# hyprsummon — summon any app as a scratchpad overlay on Hyprland
+# https://github.com/yeggis/hyprsummon | MIT License
+
+set -euo pipefail
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hyprsummon"
+CONF_FILE="$CONF_DIR/apps.conf"
+SETTINGS_FILE="$CONF_DIR/settings.conf"
+DESKTOP_DIRS=("$HOME/.local/share/applications" "/usr/share/applications")
+DISMISS_KEY="Super, Escape"
+
+RED='\033[91m'  GREEN='\033[92m'  YELLOW='\033[93m'
+CYAN='\033[96m'  BOLD='\033[1m'  RST='\033[0m'
+
+msg()  { echo -e "${GREEN}>>>${RST} $*"; }
+warn() { echo -e "${YELLOW}>>>${RST} $*" >&2; }
+die()  { echo -e "${RED}>>>${RST} $*" >&2; exit 1; }
+
+check_deps() {
+    command -v hyprctl >/dev/null || die "hyprctl not found. Is Hyprland running?"
+    command -v jq      >/dev/null || die "jq not found. Install: pacman -S jq"
+}
+
+init_conf() {
+    mkdir -p "$CONF_DIR"
+    [[ -f "$CONF_FILE" ]] || touch "$CONF_FILE"
+    # load user settings if present
+    if [[ -f "$SETTINGS_FILE" ]]; then
+        local val
+        val=$(grep '^dismiss_key=' "$SETTINGS_FILE" 2>/dev/null | cut -d'=' -f2-)
+        [[ -n "$val" ]] && DISMISS_KEY="$val"
+    fi
+}
+
+# --- config helpers (pipe-delimited: name|class|launch_cmd|max_wait|keybind) ---
+
+get_entry()  { grep -i "^${1}|" "$CONF_FILE" 2>/dev/null | head -1; }
+get_class()  { get_entry "$1" | cut -d'|' -f2; }
+get_launch() { get_entry "$1" | cut -d'|' -f3; }
+get_wait()   { local w; w=$(get_entry "$1" | cut -d'|' -f4); echo "${w:-1}"; }
+get_bind()   { get_entry "$1" | cut -d'|' -f5; }
+
+# ---------------------------------------------------------------------------
+# scan — find all chromium PWAs on the system
+# ---------------------------------------------------------------------------
+
+cmd_scan() {
+    init_conf
+    msg "Scanning for Chromium PWAs..."
+
+    local found=0
+    local tmp; tmp=$(mktemp)
+    [[ -f "$CONF_FILE" ]] && cp "$CONF_FILE" "${CONF_FILE}.bak"
+
+    for dir in "${DESKTOP_DIRS[@]}"; do
+        [[ -d "$dir" ]] || continue
+
+        while IFS= read -r -d '' df; do
+            local exec_line name_line icon_line
+            exec_line=$(grep -m1 '^Exec=' "$df" 2>/dev/null) || continue
+            name_line=$(grep -m1 '^Name=' "$df" 2>/dev/null) || continue
+            icon_line=$(grep -m1 '^Icon=' "$df" 2>/dev/null) || continue
+
+            # only care about chromium PWAs (has --app-id flag)
+            [[ "$exec_line" == *"--app-id="* ]] || continue
+
+            local app_id
+            app_id=$(echo "$exec_line" | grep -oP -- '--app-id=\K[a-zA-Z0-9]+')
+            [[ -z "$app_id" ]] && continue
+
+            # chromium stores class name in Icon field: chrome-{app_id}-Default
+            local class
+            if [[ "$icon_line" == *"chrome-"* ]]; then
+                class=$(echo "$icon_line" | sed 's/^Icon=//')
+            else
+                class="chrome-${app_id}-Default"
+            fi
+
+            # normalize the display name:
+            #   "AUR (en) - Home" → "aur"
+            #   "Google Gemini"   → "gemini"
+            #   "İnstagram"       → "instagram"
+            local raw name
+            raw=$(echo "$name_line" | sed 's/^Name=//')
+            name=$(echo "$raw" | sed 's/ *(.*//' | sed 's/ *-.*//' | sed 's/^ *//;s/ *$//')
+            if [[ $(echo "$name" | wc -w) -gt 1 ]]; then
+                name=$(echo "$name" | sed -E 's/^(Google|Microsoft|Meta|Apple|Amazon) //i')
+            fi
+            name=$(echo "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr 'İ' 'i' | tr ' ' '_' | tr -cd '[:alnum:]_')
+
+            local desktop_base launch_cmd
+            desktop_base=$(basename "$df")
+            launch_cmd="gtk-launch $desktop_base"
+
+            # preserve keybind from existing config on rescan
+            local old_bind=""
+            [[ -f "$CONF_FILE" ]] && old_bind=$(grep "^${name}|" "$CONF_FILE" 2>/dev/null | cut -d'|' -f5 || true)
+
+            if ! grep -q "^${name}|" "$tmp" 2>/dev/null; then
+                echo "${name}|${class}|${launch_cmd}|1|${old_bind}" >> "$tmp"
+                found=$((found + 1))
+                local tag=""; [[ -n "$old_bind" ]] && tag=" [${old_bind}]"
+                echo -e "  ${CYAN}✓${RST} ${BOLD}${name}${RST} → ${class}${tag}"
+            fi
+
+        done < <(find "$dir" -maxdepth 1 -name '*.desktop' -print0 2>/dev/null)
+    done
+
+    # keep manually added entries that weren't found in scan
+    if [[ -f "$CONF_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            local ename; ename=$(echo "$line" | cut -d'|' -f1)
+            if ! grep -q "^${ename}|" "$tmp" 2>/dev/null; then
+                echo "$line" >> "$tmp"
+                echo -e "  ${YELLOW}↩${RST} ${ename} (manual — kept)"
+            fi
+        done < "$CONF_FILE"
+    fi
+
+    mv "$tmp" "$CONF_FILE"
+
+    if [[ $found -eq 0 ]]; then
+        warn "No PWAs found. Install a site as app in Chromium first."
+    else
+        msg "${found} PWAs found → ${CONF_FILE}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# toggle — show/hide an app in its special workspace
+# ---------------------------------------------------------------------------
+
+cmd_toggle() {
+    local app="${1:?Usage: hyprsummon <app>}"
+    app=$(echo "$app" | tr '[:upper:]' '[:lower:]')
+
+    local class launch wait_secs
+    class=$(get_class "$app")
+    launch=$(get_launch "$app")
+    wait_secs=$(get_wait "$app")
+
+    [[ -z "$class" ]] && die "'${app}' not found. Run 'hyprsummon scan' first."
+
+    # prevent race conditions from fast key mashing
+    local lock="/tmp/hyprsummon_${app}_$(id -u).lock"
+    if ! mkdir "$lock" 2>/dev/null; then
+        exit 0
+    fi
+    trap "rmdir '$lock' 2>/dev/null" EXIT
+
+    local clients; clients=$(hyprctl clients -j)
+    local in_special="no" running="no"
+
+    if echo "$clients" | jq -e ".[] | select(.workspace.name == \"special:${app}\" and .class == \"${class}\")" >/dev/null 2>&1; then
+        in_special="yes"
+    fi
+    if echo "$clients" | jq -e ".[] | select(.class == \"${class}\")" >/dev/null 2>&1; then
+        running="yes"
+    fi
+
+    if [[ "$in_special" == "yes" ]]; then
+        # already in special workspace — just toggle visibility
+        hyprctl dispatch togglespecialworkspace "$app"
+
+    elif [[ "$running" == "yes" ]]; then
+        # running on a regular workspace — kidnap it into special
+        hyprctl dispatch movetoworkspacesilent "special:${app},class:${class}"
+        hyprctl dispatch togglespecialworkspace "$app"
+        hyprctl dispatch focuswindow "class:${class}"
+
+    else
+        # not running — launch it fresh
+        local spawn_lock="/tmp/hyprsummon_spawn_${app}.lock"
+        if mkdir "$spawn_lock" 2>/dev/null; then
+            hyprctl dispatch togglespecialworkspace "$app"
+            $launch &
+
+            # wait for the window to appear
+            local ticks=$((wait_secs * 10))
+            for ((i = 0; i < ticks; i++)); do
+                sleep 0.1
+                if hyprctl clients -j | jq -e ".[] | select(.class == \"${class}\")" >/dev/null 2>&1; then
+                    break
+                fi
+            done
+
+            rmdir "$spawn_lock" 2>/dev/null
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# dismiss — close whatever special workspace is currently visible
+# the one ring to rule them all
+# ---------------------------------------------------------------------------
+
+cmd_dismiss() {
+    local info; info=$(hyprctl monitors | grep 'special workspace:')
+
+    # nothing open — bail silently
+    if [[ -z "$info" || "$info" == *"(none)"* || "$info" == *" 0 ()"* ]]; then
+        return 0
+    fi
+
+    local name; name=$(echo "$info" | awk -F '[:(]' '{print $3}')
+    local prev_ws; prev_ws=$(hyprctl monitors -j | jq -r \
+        '.[] | select(.specialWorkspace.name != "") | .activeWorkspace.id')
+    prev_ws=${prev_ws:-1}
+
+    # toggle special off and return to previous workspace
+    # (prevents wallpaper glitches from workspace desync)
+    [[ -n "$name" ]] && hyprctl --batch \
+        "dispatch togglespecialworkspace \"$name\"; dispatch workspace $prev_ws"
+}
+
+# ---------------------------------------------------------------------------
+# list — show registered apps
+# ---------------------------------------------------------------------------
+
+cmd_list() {
+    init_conf
+    [[ -s "$CONF_FILE" ]] || { warn "No apps registered. Run 'hyprsummon scan'."; return 1; }
+
+    echo -e "${BOLD}Registered apps:${RST}\n"
+    printf "  ${CYAN}%-15s %-20s${RST} %s\n" "NAME" "KEYBIND" "CLASS"
+    echo "  $(printf '─%.0s' {1..65})"
+
+    while IFS='|' read -r name class cmd wait keybind; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        printf "  ${GREEN}%-15s${RST} ${YELLOW}%-20s${RST} %s\n" "$name" "${keybind:--}" "$class"
+    done < "$CONF_FILE"
+
+    echo -e "\n  Assign keybinds: ${CYAN}hyprsummon bind <app> '<key>'${RST}\n"
+}
+
+# ---------------------------------------------------------------------------
+# status — show which apps are running and where
+# ---------------------------------------------------------------------------
+
+cmd_status() {
+    check_deps; init_conf
+    [[ -s "$CONF_FILE" ]] || { warn "No apps registered."; return 1; }
+
+    local clients; clients=$(hyprctl clients -j)
+    echo -e "${BOLD}App status:${RST}\n"
+
+    while IFS='|' read -r name class cmd wait keybind; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        local st ws
+        if echo "$clients" | jq -e ".[] | select(.class == \"${class}\")" >/dev/null 2>&1; then
+            ws=$(echo "$clients" | jq -r ".[] | select(.class == \"${class}\") | .workspace.name" | head -1)
+            if [[ "$ws" == special:* ]]; then
+                st="${GREEN}● special:${ws#special:}${RST}"
+            else
+                st="${CYAN}● ws:${ws}${RST}"
+            fi
+        else
+            st="${RED}○ stopped${RST}"
+        fi
+        printf "  %-15s %b\n" "$name" "$st"
+    done < "$CONF_FILE"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
+# pick — click a window to register it
+# ---------------------------------------------------------------------------
+
+cmd_pick() {
+    check_deps; init_conf
+
+    echo -e "${BOLD}Focus the window you want to add.${RST}"
+    for i in 3 2 1; do
+        echo -ne "\r  Capturing in ${YELLOW}${i}${RST}... "
+        sleep 1
+    done
+
+    local win; win=$(hyprctl activewindow -j)
+    local class; class=$(echo "$win" | jq -r '.class')
+    local title; title=$(echo "$win" | jq -r '.title')
+
+    if [[ -z "$class" || "$class" == "null" ]]; then
+        die "No window detected."
+    fi
+
+    echo -e "\r  ${GREEN}Caught:${RST} ${BOLD}${class}${RST} — ${title}"
+    echo ""
+
+    local suggested; suggested=$(echo "$class" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')
+    echo -ne "${BOLD}Name${RST} [${suggested}]: "
+    read -r chosen_name
+    chosen_name=${chosen_name:-$suggested}
+    chosen_name=$(echo "$chosen_name" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')
+
+    cmd_add "$chosen_name" "$class" "$class" 2
+
+    echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
+    read -r chosen_key
+    if [[ -n "$chosen_key" ]]; then
+        cmd_bind "$chosen_name" "$chosen_key"
+    fi
+
+    echo ""
+    echo -ne "${BOLD}Apply now?${RST} [Y/n]: "
+    read -r do_apply
+    if [[ -z "$do_apply" || "$do_apply" =~ ^[Yy] ]]; then
+        cmd_apply
+    else
+        echo -e "  Run ${CYAN}hyprsummon apply${RST} when ready."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# add / remove — manual app management
+# ---------------------------------------------------------------------------
+
+cmd_add() {
+    local name="${1:?Usage: hyprsummon add <name> <class> [launch_cmd] [max_wait]}"
+    local class="${2:?window class required}"
+    local cmd="${3:-$name}"
+    local wait="${4:-1}"
+
+    init_conf
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+
+    if grep -q "^${name}|" "$CONF_FILE" 2>/dev/null; then
+        local old_bind; old_bind=$(grep "^${name}|" "$CONF_FILE" | cut -d'|' -f5 || true)
+        sed -i "/^${name}|/d" "$CONF_FILE"
+        echo "${name}|${class}|${cmd}|${wait}|${old_bind}" >> "$CONF_FILE"
+        msg "'${name}' updated."
+    else
+        echo "${name}|${class}|${cmd}|${wait}|" >> "$CONF_FILE"
+        msg "'${name}' added."
+    fi
+}
+
+cmd_remove() {
+    local name="${1:?Usage: hyprsummon remove <name>}"
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+
+    if grep -q "^${name}|" "$CONF_FILE" 2>/dev/null; then
+        sed -i "/^${name}|/d" "$CONF_FILE"
+        msg "'${name}' removed."
+    else
+        warn "'${name}' not found."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# bind — assign a keybind to an app
+# ---------------------------------------------------------------------------
+
+cmd_bind() {
+    local name="${1:?Usage: hyprsummon bind <app> '<key>'}"
+    local key="${2:?Example: hyprsummon bind youtube 'Super, Y'}"
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+
+    init_conf
+    grep -q "^${name}|" "$CONF_FILE" 2>/dev/null \
+        || die "'${name}' not found. Run 'hyprsummon scan' first."
+
+    local line app_class app_cmd app_wait
+    line=$(grep "^${name}|" "$CONF_FILE")
+    app_class=$(echo "$line" | cut -d'|' -f2)
+    app_cmd=$(echo "$line" | cut -d'|' -f3)
+    app_wait=$(echo "$line" | cut -d'|' -f4)
+
+    sed -i "/^${name}|/d" "$CONF_FILE"
+    echo "${name}|${app_class}|${app_cmd}|${app_wait}|${key}" >> "$CONF_FILE"
+
+    msg "${BOLD}${name}${RST} → ${YELLOW}${key}${RST}"
+}
+
+# ---------------------------------------------------------------------------
+# apply — write hyprland configs and reload
+# ---------------------------------------------------------------------------
+
+cmd_apply() {
+    init_conf; check_deps
+    [[ -s "$CONF_FILE" ]] || die "No apps configured. Run 'hyprsummon scan' first."
+
+    local hypr_dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprsummon"
+    mkdir -p "$hypr_dir"
+
+    local rules_file="$hypr_dir/rules.conf"
+    local binds_file="$hypr_dir/binds.conf"
+
+    # windowrules — pin each app to its special workspace
+    {
+        echo "# hyprsummon — auto-generated ($(date '+%Y-%m-%d'))"
+        echo ""
+        while IFS='|' read -r name class cmd wait keybind; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            echo "windowrule = match:class ^(${class})$, workspace special:${name}"
+        done < "$CONF_FILE"
+    } > "$rules_file"
+    msg "Rules → ${rules_file}"
+
+    # keybinds — only for apps that have a key assigned
+    {
+        echo "# hyprsummon — auto-generated ($(date '+%Y-%m-%d'))"
+        echo ""
+        while IFS='|' read -r name class cmd wait keybind; do
+            [[ -z "$name" || "$name" == \#* ]] && continue
+            [[ -n "$keybind" ]] && echo "bind = ${keybind}, exec, hyprsummon ${name}"
+        done < "$CONF_FILE"
+        echo ""
+        echo "# dismiss any active special workspace"
+        echo "bind = ${DISMISS_KEY}, exec, hyprsummon dismiss"
+    } > "$binds_file"
+    msg "Binds → ${binds_file}"
+
+    # auto-source into hyprland.conf (idempotent)
+    local hypr_conf="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+    local main_conf="$hypr_conf/hyprland.conf"
+
+    if ! grep -rq "hyprsummon/" "$hypr_conf" 2>/dev/null; then
+        if [[ -f "$main_conf" ]]; then
+            # clean up old hpt references if upgrading
+            sed -i '/hypr\/hpt\//d' "$main_conf" 2>/dev/null || true
+            sed -i '/# hypr-pwa-toggle/d' "$main_conf" 2>/dev/null || true
+
+            {
+                echo ""
+                echo "# hyprsummon"
+                echo "source = ~/.config/hypr/hyprsummon/rules.conf"
+                echo "source = ~/.config/hypr/hyprsummon/binds.conf"
+            } >> "$main_conf"
+            msg "Source lines added → ${main_conf}"
+        else
+            warn "hyprland.conf not found. Add these lines to your config manually:"
+            echo -e "  ${CYAN}source = ~/.config/hypr/hyprsummon/rules.conf${RST}"
+            echo -e "  ${CYAN}source = ~/.config/hypr/hyprsummon/binds.conf${RST}"
+        fi
+    fi
+
+    hyprctl reload >/dev/null 2>&1
+    msg "Hyprland reloaded ✓"
+}
+
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
+
+cmd_help() {
+    cat <<'EOF'
+hyprsummon — summon any app as a scratchpad overlay on Hyprland
+
+WIZARD MODE (interactive, recommended for beginners):
+  hyprsummon pick                     Focus a window, name it, bind it — done
+                                      Walks you through the whole setup step by step.
+
+COMMAND MODE (direct, for power users):
+  hyprsummon <app>                    Toggle app (show/hide)
+  hyprsummon dismiss                  Close active special workspace
+                                      Default keybind: Super+Escape (via apply)
+  hyprsummon scan                     Auto-detect all Chromium PWAs at once
+  hyprsummon bind <app> '<key>'       Assign a keybind
+  hyprsummon apply                    Write Hyprland configs + reload
+  hyprsummon list                     Show registered apps and keybinds
+  hyprsummon status                   Show running/stopped state of each app
+  hyprsummon add <name> <class> [cmd] [wait]
+                                      Register an app manually
+  hyprsummon remove <name>            Unregister an app
+
+QUICK START (wizard):
+  1. Open the app you want to summon
+  2. hyprsummon pick
+  3. That's it
+
+QUICK START (commands):
+  1. Install a site as app in Chromium (⋮ → "Install page as app")
+  2. hyprsummon scan
+  3. hyprsummon bind youtube 'Super, Y'
+  4. hyprsummon apply
+
+DISMISS KEYBIND:
+  The dismiss key closes whatever special workspace is open.
+  Default: Super+Escape. To change it:
+    echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
+    hyprsummon apply
+
+REQUIRES: hyprland, jq, bash >= 4.0
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# main — if cmd doesn't match a subcommand, treat it as an app name
+# ---------------------------------------------------------------------------
+
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        scan)           cmd_scan ;;
+        pick)           cmd_pick ;;
+        list|ls)        cmd_list ;;
+        status|st)      cmd_status ;;
+        toggle)         check_deps; cmd_toggle "$@" ;;
+        dismiss|close)  check_deps; cmd_dismiss ;;
+        bind)           cmd_bind "$@" ;;
+        apply)          cmd_apply ;;
+        add)            cmd_add "$@" ;;
+        remove|rm)      cmd_remove "$@" ;;
+        help|--help|-h) cmd_help ;;
+        -*)             die "Unknown option: '${cmd}'" ;;
+        *)              check_deps; cmd_toggle "$cmd" "$@" ;;
+    esac
+}
+
+main "$@"
