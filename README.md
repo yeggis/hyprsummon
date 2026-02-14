@@ -1,5 +1,7 @@
 # hyprsummon
 
+> 🇹🇷 [Türkçe](README.tr.md)
+
 Summon any app as a scratchpad overlay on Hyprland.
 One key to show. Same key to hide. No alt-tab, no workspace switching.
 
