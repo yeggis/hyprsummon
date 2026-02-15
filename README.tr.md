@@ -59,7 +59,7 @@ sudo apt install jq
 
 ## İki kullanım şekli
 
-### Wizard modu — `pick`
+### Sihirbaz modu — `pick`
 
 En kolay yol. İstediğiniz uygulamayı açın, sonra:
 
@@ -67,7 +67,7 @@ En kolay yol. İstediğiniz uygulamayı açın, sonra:
 hyprsummon pick
 ```
 
-3 saniyelik geri sayım sırasında hedef pencereye tıklayın. Ardından isim, kısayol ve uygulama adımlarını tek seferde halledin.
+3 saniyelik geri sayım sırasında hedef pencereye tıklayın. Ardından isim, otomatik başlatma, kısayol ve uygulama adımlarını tek seferde halledin.
 
 ```
 $ hyprsummon pick
@@ -76,8 +76,9 @@ Focus the window you want to add.
   Caught: Spotify — Liked Songs
 
 Name [spotify]:
-Keybind (e.g. Super, Z): Super, M
+Auto-launch when not running? [y/N]: y
 >>> 'spotify' added.
+Keybind (e.g. Super, Z): Super, M
 >>> spotify → Super, M
 
 Apply now? [Y/n]:
@@ -86,7 +87,12 @@ Apply now? [Y/n]:
 >>> Hyprland reloaded ✓
 ```
 
-Bitti. `Super+M`'ye basın — Spotify kayarak açılır.
+Bitti. `Super+M`'ye basın — Spotify başlatılır ve kayarak açılır. Tekrar basın — kaybolur.
+
+**Akıllı özellikler:**
+- Pencere zaten kayıtlıysa mevcut kaydı algılar ve mevcut ismini önerir
+- Var olan bir kaydı yeniden adlandırırsanız eski kayıt otomatik silinir (kopya oluşmaz)
+- Başlatma komutu `.desktop` dosyalarından otomatik algılanır — bilmenize gerek yok
 
 ### Komut modu
 
@@ -106,22 +112,52 @@ hyprsummon apply                       # config yaz, Hyprland'ı yenile
 
 Hyprland config dosya yapınız ne olursa olsun çalışır.
 
+## Otomatik başlatma (Auto-launch)
+
+Varsayılan olarak kısayollar sadece special workspace'i açıp kapatır. Uygulama çalışmıyorsa workspace boş açılır ve uygulamayı başlatıcınızdan (fuzzel, rofi vb.) elle açmanız gerekir.
+
+**Otomatik başlatma** etkinleştirildiğinde, kısayol uygulamayı da başlatır — tıpkı dropdown terminal gibi. Kilit mekanizması hızlı tuş basışlarında çift pencere açılmasını önler.
+
+**Sihirbaz ile etkinleştirme:**
+```bash
+hyprsummon pick
+# "Auto-launch when not running?" sorusuna 'y' cevabı verin
+```
+
+**Komut ile etkinleştirme:**
+```bash
+hyprsummon add spotify Spotify 5 yes
+#                      │       │  └── autolaunch: evet
+#                      │       └───── max bekleme: 5 saniye
+#                      └───────────── pencere sınıfı
+```
+
 ## PWA olmayan uygulamalar
 
 İki yol:
 
-**Wizard ile** — uygulamayı açın ve `hyprsummon pick` çalıştırın. Pencere sınıfını otomatik algılar.
+**Sihirbaz ile** — uygulamayı açın ve `hyprsummon pick` çalıştırın. Pencere sınıfını ve başlatma komutunu otomatik algılar.
 
-**Manuel:**
+**Manuel** — sadece isim ve pencere sınıfı yeter:
 
 ```bash
-hyprsummon add steam steam "steam -silent" 5
-hyprsummon add terminal kitty kitty 1
+hyprsummon add zen zen 15 yes
+hyprsummon add steam steam 5 yes
+hyprsummon bind zen 'Super, F'
 hyprsummon bind steam 'Super+Shift, G'
 hyprsummon apply
 ```
 
-Format: `hyprsummon add <isim> <pencere_sınıfı> [başlatma_komutu] [bekleme_süresi]`
+Başlatma komutu `.desktop` dosyalarından otomatik algılanır. Özel bir komut gerekiyorsa (nadir durum) son parametre olarak verin:
+
+```bash
+hyprsummon add zen zen 15 yes "zen-browser --private-window"
+```
+
+Format: `hyprsummon add <isim> <sınıf> [bekleme] [autolaunch] [komut]`
+
+> **Pencere sınıfını bulmak:** Uygulamayı açın ve çalıştırın: `hyprctl activewindow -j | jq -r '.class'`
+> Ya da `hyprsummon pick` kullanın — bunu sizin yerinize yapar.
 
 ## Komutlar
 
@@ -129,13 +165,13 @@ Format: `hyprsummon add <isim> <pencere_sınıfı> [başlatma_komutu] [bekleme_s
 |---|---|
 | `hyprsummon <uygulama>` | Uygulamayı aç/kapat |
 | `hyprsummon dismiss` | Açık olan special workspace'i kapat |
-| `hyprsummon pick` | İnteraktif wizard — odakla, isimle, kısayol ata, uygula |
+| `hyprsummon pick` | İnteraktif sihirbaz — odakla, isimle, kısayol ata, uygula |
 | `hyprsummon scan` | Tüm Chromium PWA'larını bul |
-| `hyprsummon list` | Kayıtlı uygulamaları ve kısayolları göster |
+| `hyprsummon list` | Kayıtlı uygulamaları, kısayolları ve autolaunch durumunu göster |
 | `hyprsummon status` | Çalışan/durmuş durumları göster |
-| `hyprsummon bind <app> '<tuş>'` | Kısayol ata |
+| `hyprsummon bind <app> '<tuş>'` | Kısayol ata (çakışmaları otomatik temizler) |
 | `hyprsummon apply` | Config yaz + Hyprland'ı yenile |
-| `hyprsummon add <ad> <class> [cmd] [wait]` | Manuel uygulama ekle |
+| `hyprsummon add <ad> <class> [wait] [autolaunch] [cmd]` | Manuel uygulama ekle |
 | `hyprsummon remove <ad>` | Uygulamayı kaldır |
 
 ## Dismiss tuşu
@@ -163,24 +199,31 @@ hyprsummon apply
   (gizle/  │    │  çalışıyor mu?     │
    göster) │    └──────┬─────────────┘
            │      evet │        hayır
-           │           │
-           │   special │    başlat +
-           │   ws'ye   │    pencere
-           │   taşı    │    oluşana
-           │   + göster│    kadar bekle
+           │           │    ┌──────────────┐
+           │   special │    │ autolaunch?  │
+           │   ws'ye   │    └──┬───────────┘
+           │   taşı    │  evet │       hayır
+           │   + göster│       │
+           │           │  başlat +    boş ws
+           │           │  pencere     aç/kapat
+           │           │  oluşana
+           │           │  kadar bekle
 ```
 
 - **Atomik kilitleme** — `mkdir` tabanlı kilit, hızlı tuş basışlarından kaynaklanan çift tetiklemeyi önler
 - **Tek sorgu** — pencere durumu `hyprctl clients -j` ile tek seferde kontrol edilir
 - **Başlatma kilidi** — yavaş başlayan uygulamalarda çift pencere açılmasını önler
+- **Çift kayıt koruması** — kısayol çakışmaları otomatik çözülür, aynı sınıfa sahip kayıtlar algılanır
 
 ## Config dosyaları
 
 **Uygulama kaydı** — `~/.config/hyprsummon/apps.conf`:
 ```
-youtube|chrome-agimnkijcaahngcdmfeangaknmldooml-Default|gtk-launch youtube.desktop|1|Super, Y
-steam|steam|steam -silent|5|Super+Shift, G
+youtube|chrome-agimnkijcaahngcdmfeangaknmldooml-Default|gtk-launch youtube.desktop|1|Super, Y|yes
+steam|steam|steam -silent|5|Super+Shift, G|no
 ```
+
+Format: `isim|sınıf|başlatma_komutu|bekleme|kısayol|autolaunch`
 
 Sınıf adları Chromium'un iç app-id'sini içerir ve her tarayıcı kurulumuna özgüdür. `scan` bu yüzden var — `.desktop` dosyalarınızı okuyarak sisteminize ait doğru ID'leri bulur.
 
@@ -211,6 +254,9 @@ animation = specialWorkspace, 1, 3, default, slidevert
 
 **Firefox desteği?**
 Firefox yerel olarak PWA desteklemez. `hyprsummon pick` veya `hyprsummon add` ile doğru pencere sınıfını kullanın.
+
+**Otomatik başlatmayı pick olmadan kullanabilir miyim?**
+Evet: `hyprsummon add <isim> <sınıf> <bekleme> yes`. Başlatma komutu otomatik algılanır.
 
 ## Lisans
 

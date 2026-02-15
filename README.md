@@ -67,7 +67,7 @@ The easiest way. Open the app you want, then:
 hyprsummon pick
 ```
 
-It gives you a 3-second countdown to focus the target window, then walks you through naming it, assigning a keybind, and applying — all in one go.
+It gives you a 3-second countdown to focus the target window, then walks you through naming it, enabling auto-launch, assigning a keybind, and applying — all in one go.
 
 ```
 $ hyprsummon pick
@@ -76,8 +76,9 @@ Focus the window you want to add.
   Caught: Spotify — Liked Songs
 
 Name [spotify]:
-Keybind (e.g. Super, Z): Super, M
+Auto-launch when not running? [y/N]: y
 >>> 'spotify' added.
+Keybind (e.g. Super, Z): Super, M
 >>> spotify → Super, M
 
 Apply now? [Y/n]:
@@ -86,7 +87,12 @@ Apply now? [Y/n]:
 >>> Hyprland reloaded ✓
 ```
 
-Done. Press `Super+M` — Spotify slides in.
+Done. Press `Super+M` — Spotify launches and slides in. Press again — it disappears.
+
+**Smart features:**
+- If the window is already registered, it detects the existing entry and suggests the current name
+- If you rename an existing entry, the old one is automatically removed (no duplicates)
+- Launch command is auto-detected from `.desktop` files — you don't need to know it
 
 ### Command mode
 
@@ -106,22 +112,52 @@ hyprsummon apply                       # writes configs, reloads Hyprland
 
 Works regardless of your Hyprland config file structure.
 
+## Auto-launch
+
+By default, keybinds only toggle the special workspace. If the app isn't running, the workspace opens empty and you launch the app manually from your launcher.
+
+With **auto-launch** enabled, the keybind also starts the app if it's not running — just like a dropdown terminal. A lock mechanism prevents duplicate windows from fast key presses.
+
+**Enable via wizard:**
+```bash
+hyprsummon pick
+# answer 'y' to "Auto-launch when not running?"
+```
+
+**Enable via command:**
+```bash
+hyprsummon add spotify Spotify 5 yes
+#                      │       │  └── autolaunch: yes
+#                      │       └───── max wait: 5 seconds
+#                      └───────────── window class
+```
+
 ## Adding non-PWA apps
 
 Two ways:
 
-**With the wizard** — just open the app and `hyprsummon pick`. It detects the window class automatically.
+**With the wizard** — just open the app and `hyprsummon pick`. It detects the window class and launch command automatically.
 
-**Manually:**
+**Manually** — you only need the name and window class:
 
 ```bash
-hyprsummon add steam steam "steam -silent" 5
-hyprsummon add terminal kitty kitty 1
+hyprsummon add zen zen 15 yes
+hyprsummon add steam steam 5 yes
+hyprsummon bind zen 'Super, F'
 hyprsummon bind steam 'Super+Shift, G'
 hyprsummon apply
 ```
 
-Format: `hyprsummon add <name> <window_class> [launch_command] [wait_seconds]`
+The launch command is auto-detected from `.desktop` files. If you need a custom command (rare), pass it as the last parameter:
+
+```bash
+hyprsummon add zen zen 15 yes "zen-browser --private-window"
+```
+
+Format: `hyprsummon add <name> <class> [wait] [autolaunch] [launch_cmd]`
+
+> **Finding the window class:** Open the app and run `hyprctl activewindow -j | jq -r '.class'`
+> Or just use `hyprsummon pick` — it does this for you.
 
 ## Commands
 
@@ -131,11 +167,11 @@ Format: `hyprsummon add <name> <window_class> [launch_command] [wait_seconds]`
 | `hyprsummon dismiss` | Dismiss whatever special workspace is open |
 | `hyprsummon pick` | Interactive wizard — focus, name, bind, apply |
 | `hyprsummon scan` | Auto-detect all Chromium PWAs |
-| `hyprsummon list` | List registered apps and keybinds |
+| `hyprsummon list` | List registered apps, keybinds, and autolaunch status |
 | `hyprsummon status` | Show running/stopped state |
-| `hyprsummon bind <app> '<key>'` | Assign a keybind |
+| `hyprsummon bind <app> '<key>'` | Assign a keybind (removes conflicts) |
 | `hyprsummon apply` | Write Hyprland configs + reload |
-| `hyprsummon add <n> <class> [cmd] [wait]` | Register an app manually |
+| `hyprsummon add <n> <class> [wait] [autolaunch] [cmd]` | Register an app manually |
 | `hyprsummon remove <name>` | Unregister an app |
 
 ## The dismiss key
@@ -163,23 +199,30 @@ When you run `hyprsummon youtube`:
   (hide/   │    │  somewhere?      │
    show)   │    └──────┬───────────┘
            │       yes │        no
-           │           │
-           │   move to │    launch +
-           │   special │    wait for
-           │   + show  │    window
+           │           │    ┌──────────────┐
+           │   move to │    │ autolaunch?  │
+           │   special │    └──┬───────────┘
+           │   + show  │   yes │       no
+           │           │       │
+           │           │  launch +   toggle
+           │           │  wait for   empty
+           │           │  window     workspace
 ```
 
 - **Atomic locking** — `mkdir` based lock prevents double-toggle from fast key mashing
 - **Single query** — window state checked once via `hyprctl clients -j`, not per-app
 - **Launch guard** — separate lock prevents spawning duplicates during slow startup
+- **Duplicate protection** — keybind conflicts are auto-resolved, same-class entries are detected
 
 ## Config files
 
 **App registry** — `~/.config/hyprsummon/apps.conf`:
 ```
-youtube|chrome-agimnkijcaahngcdmfeangaknmldooml-Default|gtk-launch youtube.desktop|1|Super, Y
-steam|steam|steam -silent|5|Super+Shift, G
+youtube|chrome-agimnkijcaahngcdmfeangaknmldooml-Default|gtk-launch youtube.desktop|1|Super, Y|yes
+steam|steam|steam -silent|5|Super+Shift, G|no
 ```
+
+Format: `name|class|launch_cmd|wait|keybind|autolaunch`
 
 The class names contain Chromium's internal app-id, unique per browser installation. That's why `scan` exists — it reads your `.desktop` files to find the correct IDs for your system.
 
@@ -210,6 +253,9 @@ animation = specialWorkspace, 1, 3, default, slidevert
 
 **Firefox support?**
 Firefox doesn't do PWAs natively. Use `hyprsummon pick` or `hyprsummon add` with the correct window class.
+
+**Can I use autolaunch without pick?**
+Yes: `hyprsummon add <name> <class> <wait> yes`. The launch command is auto-detected.
 
 ## License
 

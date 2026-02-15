@@ -33,13 +33,14 @@ init_conf() {
     fi
 }
 
-# --- config helpers (pipe-delimited: name|class|launch_cmd|max_wait|keybind) ---
+# --- config helpers (pipe-delimited: name|class|launch_cmd|max_wait|keybind|autolaunch) ---
 
-get_entry()  { grep -i "^${1}|" "$CONF_FILE" 2>/dev/null | head -1; }
-get_class()  { get_entry "$1" | cut -d'|' -f2; }
-get_launch() { get_entry "$1" | cut -d'|' -f3; }
-get_wait()   { local w; w=$(get_entry "$1" | cut -d'|' -f4); echo "${w:-1}"; }
-get_bind()   { get_entry "$1" | cut -d'|' -f5; }
+get_entry()      { grep -i "^${1}|" "$CONF_FILE" 2>/dev/null | head -1; }
+get_class()      { get_entry "$1" | cut -d'|' -f2; }
+get_launch()     { get_entry "$1" | cut -d'|' -f3; }
+get_wait()       { local w; w=$(get_entry "$1" | cut -d'|' -f4); echo "${w:-1}"; }
+get_bind()       { get_entry "$1" | cut -d'|' -f5; }
+get_autolaunch() { local v; v=$(get_entry "$1" | cut -d'|' -f6); echo "${v:-no}"; }
 
 # ---------------------------------------------------------------------------
 # scan — find all chromium PWAs on the system
@@ -93,12 +94,13 @@ cmd_scan() {
             desktop_base=$(basename "$df")
             launch_cmd="gtk-launch $desktop_base"
 
-            # preserve keybind from existing config on rescan
-            local old_bind=""
+            # preserve keybind + autolaunch on rescan
+            local old_bind="" old_autolaunch=""
             [[ -f "$CONF_FILE" ]] && old_bind=$(grep "^${name}|" "$CONF_FILE" 2>/dev/null | cut -d'|' -f5 || true)
+            [[ -f "$CONF_FILE" ]] && old_autolaunch=$(grep "^${name}|" "$CONF_FILE" 2>/dev/null | cut -d'|' -f6 || true)
 
             if ! grep -q "^${name}|" "$tmp" 2>/dev/null; then
-                echo "${name}|${class}|${launch_cmd}|1|${old_bind}" >> "$tmp"
+                echo "${name}|${class}|${launch_cmd}|1|${old_bind}|${old_autolaunch}" >> "$tmp"
                 found=$((found + 1))
                 local tag=""; [[ -n "$old_bind" ]] && tag=" [${old_bind}]"
                 echo -e "  ${CYAN}✓${RST} ${BOLD}${name}${RST} → ${class}${tag}"
@@ -171,7 +173,16 @@ cmd_toggle() {
         hyprctl dispatch focuswindow "class:${class}"
 
     else
-        # not running — launch it fresh
+        # not running
+        local al; al=$(get_autolaunch "$app")
+
+        if [[ "$al" != "yes" ]]; then
+            # no autolaunch — just toggle the workspace
+            hyprctl dispatch togglespecialworkspace "$app"
+            exit 0
+        fi
+
+        # launch it
         local spawn_lock="/tmp/hyprsummon_spawn_${app}.lock"
         if mkdir "$spawn_lock" 2>/dev/null; then
             hyprctl dispatch togglespecialworkspace "$app"
@@ -224,12 +235,13 @@ cmd_list() {
     [[ -s "$CONF_FILE" ]] || { warn "No apps registered. Run 'hyprsummon scan'."; return 1; }
 
     echo -e "${BOLD}Registered apps:${RST}\n"
-    printf "  ${CYAN}%-15s %-20s${RST} %s\n" "NAME" "KEYBIND" "CLASS"
-    echo "  $(printf '─%.0s' {1..65})"
+    printf "  ${CYAN}%-15s %-20s %-12s${RST} %s\n" "NAME" "KEYBIND" "AUTOLAUNCH" "CLASS"
+    echo "  $(printf '─%.0s' {1..75})"
 
-    while IFS='|' read -r name class cmd wait keybind; do
+    while IFS='|' read -r name class cmd wait keybind autolaunch; do
         [[ -z "$name" || "$name" == \#* ]] && continue
-        printf "  ${GREEN}%-15s${RST} ${YELLOW}%-20s${RST} %s\n" "$name" "${keybind:--}" "$class"
+        autolaunch="${autolaunch:-no}"
+        printf "  ${GREEN}%-15s${RST} ${YELLOW}%-20s${RST} %-12s %s\n" "$name" "${keybind:--}" "$autolaunch" "$class"
     done < "$CONF_FILE"
 
     echo -e "\n  Assign keybinds: ${CYAN}hyprsummon bind <app> '<key>'${RST}\n"
@@ -246,7 +258,7 @@ cmd_status() {
     local clients; clients=$(hyprctl clients -j)
     echo -e "${BOLD}App status:${RST}\n"
 
-    while IFS='|' read -r name class cmd wait keybind; do
+    while IFS='|' read -r name class cmd wait keybind autolaunch; do
         [[ -z "$name" || "$name" == \#* ]] && continue
         local st ws
         if echo "$clients" | jq -e ".[] | select(.class == \"${class}\")" >/dev/null 2>&1; then
@@ -288,13 +300,66 @@ cmd_pick() {
     echo -e "\r  ${GREEN}Caught:${RST} ${BOLD}${class}${RST} — ${title}"
     echo ""
 
-    local suggested; suggested=$(echo "$class" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')
+    # already registered?
+    local existing_name=""
+    existing_name=$(grep "|${class}|" "$CONF_FILE" 2>/dev/null | cut -d'|' -f1 | head -1 || true)
+
+    local suggested
+    if [[ -n "$existing_name" ]]; then
+        suggested="$existing_name"
+        echo -e "  ${YELLOW}↩${RST} Already registered as ${BOLD}${existing_name}${RST}"
+    else
+        suggested=$(echo "$class" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')
+    fi
+
     echo -ne "${BOLD}Name${RST} [${suggested}]: "
     read -r chosen_name
     chosen_name=${chosen_name:-$suggested}
     chosen_name=$(echo "$chosen_name" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]_')
 
-    cmd_add "$chosen_name" "$class" "$class" 2
+    # renamed — drop the old entry
+    if [[ -n "$existing_name" && "$chosen_name" != "$existing_name" ]]; then
+        sed -i "/^${existing_name}|/d" "$CONF_FILE"
+        msg "Old entry '${existing_name}' replaced."
+    fi
+
+    # find launch command
+    local launch_cmd=""
+
+    # keep existing gtk-launch cmd if valid
+    local existing; existing=$(get_launch "$chosen_name" 2>/dev/null || true)
+    if [[ -n "$existing" && "$existing" == gtk-launch* ]]; then
+        launch_cmd="$existing"
+    fi
+
+    # otherwise search .desktop files
+    if [[ -z "$launch_cmd" ]]; then
+        for dir in "${DESKTOP_DIRS[@]}"; do
+            [[ -d "$dir" ]] || continue
+            local match=""
+            # try Icon= (PWAs)
+            match=$(grep -rl "^Icon=.*${class}" "$dir"/*.desktop 2>/dev/null || true)
+            match=$(echo "$match" | head -1)
+            # try StartupWMClass
+            if [[ -z "$match" ]]; then
+                match=$(grep -rl "StartupWMClass=${class}" "$dir"/*.desktop 2>/dev/null || true)
+                match=$(echo "$match" | head -1)
+            fi
+            if [[ -n "$match" ]]; then
+                launch_cmd="gtk-launch $(basename "$match")"
+                break
+            fi
+        done
+    fi
+
+    # fallback
+    [[ -z "$launch_cmd" ]] && launch_cmd="$class"
+
+    echo -ne "${BOLD}Auto-launch when not running?${RST} [y/N]: "
+    read -r chosen_al
+    [[ "$chosen_al" =~ ^[Yy] ]] && chosen_al="yes" || chosen_al="no"
+
+    cmd_add "$chosen_name" "$class" 2 "$chosen_al" "$launch_cmd"
 
     echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
     read -r chosen_key
@@ -317,21 +382,41 @@ cmd_pick() {
 # ---------------------------------------------------------------------------
 
 cmd_add() {
-    local name="${1:?Usage: hyprsummon add <name> <class> [launch_cmd] [max_wait]}"
+    local name="${1:?Usage: hyprsummon add <name> <class> [max_wait] [autolaunch] [launch_cmd]}"
     local class="${2:?window class required}"
-    local cmd="${3:-$name}"
-    local wait="${4:-1}"
+    local wait="${3:-1}"
+    local autolaunch="${4:-no}"
+    local cmd="${5:-}"
 
     init_conf
     name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
 
+    # auto-detect launch cmd from .desktop
+    if [[ -z "$cmd" || "$cmd" == "$class" ]]; then
+        for dir in "${DESKTOP_DIRS[@]}"; do
+            [[ -d "$dir" ]] || continue
+            local match=""
+            match=$(grep -rl "^Icon=.*${class}" "$dir"/*.desktop 2>/dev/null || true)
+            match=$(echo "$match" | head -1)
+            if [[ -z "$match" ]]; then
+                match=$(grep -rl "StartupWMClass=${class}" "$dir"/*.desktop 2>/dev/null || true)
+                match=$(echo "$match" | head -1)
+            fi
+            if [[ -n "$match" ]]; then
+                cmd="gtk-launch $(basename "$match")"
+                break
+            fi
+        done
+        [[ -z "$cmd" ]] && cmd="$class"
+    fi
+
     if grep -q "^${name}|" "$CONF_FILE" 2>/dev/null; then
         local old_bind; old_bind=$(grep "^${name}|" "$CONF_FILE" | cut -d'|' -f5 || true)
         sed -i "/^${name}|/d" "$CONF_FILE"
-        echo "${name}|${class}|${cmd}|${wait}|${old_bind}" >> "$CONF_FILE"
+        echo "${name}|${class}|${cmd}|${wait}|${old_bind}|${autolaunch}" >> "$CONF_FILE"
         msg "'${name}' updated."
     else
-        echo "${name}|${class}|${cmd}|${wait}|" >> "$CONF_FILE"
+        echo "${name}|${class}|${cmd}|${wait}||${autolaunch}" >> "$CONF_FILE"
         msg "'${name}' added."
     fi
 }
@@ -361,14 +446,30 @@ cmd_bind() {
     grep -q "^${name}|" "$CONF_FILE" 2>/dev/null \
         || die "'${name}' not found. Run 'hyprsummon scan' first."
 
-    local line app_class app_cmd app_wait
+    # steal keybind from conflicting app if needed
+    local conflict=""
+    conflict=$(grep "|${key}|" "$CONF_FILE" 2>/dev/null | grep -v "^${name}|" | cut -d'|' -f1 | head -1 || true)
+    if [[ -n "$conflict" ]]; then
+        warn "Key '${key}' was bound to '${conflict}' — removing old binding."
+        local cline; cline=$(grep "^${conflict}|" "$CONF_FILE")
+        local c_class c_cmd c_wait c_al
+        c_class=$(echo "$cline" | cut -d'|' -f2)
+        c_cmd=$(echo "$cline" | cut -d'|' -f3)
+        c_wait=$(echo "$cline" | cut -d'|' -f4)
+        c_al=$(echo "$cline" | cut -d'|' -f6)
+        sed -i "/^${conflict}|/d" "$CONF_FILE"
+        echo "${conflict}|${c_class}|${c_cmd}|${c_wait}||${c_al}" >> "$CONF_FILE"
+    fi
+
+    local line app_class app_cmd app_wait app_al
     line=$(grep "^${name}|" "$CONF_FILE")
     app_class=$(echo "$line" | cut -d'|' -f2)
     app_cmd=$(echo "$line" | cut -d'|' -f3)
     app_wait=$(echo "$line" | cut -d'|' -f4)
+    app_al=$(echo "$line" | cut -d'|' -f6)
 
     sed -i "/^${name}|/d" "$CONF_FILE"
-    echo "${name}|${app_class}|${app_cmd}|${app_wait}|${key}" >> "$CONF_FILE"
+    echo "${name}|${app_class}|${app_cmd}|${app_wait}|${key}|${app_al}" >> "$CONF_FILE"
 
     msg "${BOLD}${name}${RST} → ${YELLOW}${key}${RST}"
 }
@@ -391,7 +492,7 @@ cmd_apply() {
     {
         echo "# hyprsummon — auto-generated ($(date '+%Y-%m-%d'))"
         echo ""
-        while IFS='|' read -r name class cmd wait keybind; do
+        while IFS='|' read -r name class cmd wait keybind autolaunch; do
             [[ -z "$name" || "$name" == \#* ]] && continue
             echo "windowrule = match:class ^(${class})$, workspace special:${name}"
         done < "$CONF_FILE"
@@ -402,7 +503,7 @@ cmd_apply() {
     {
         echo "# hyprsummon — auto-generated ($(date '+%Y-%m-%d'))"
         echo ""
-        while IFS='|' read -r name class cmd wait keybind; do
+        while IFS='|' read -r name class cmd wait keybind autolaunch; do
             [[ -z "$name" || "$name" == \#* ]] && continue
             [[ -n "$keybind" ]] && echo "bind = ${keybind}, exec, hyprsummon ${name}"
         done < "$CONF_FILE"
@@ -448,39 +549,52 @@ cmd_help() {
     cat <<'EOF'
 hyprsummon — summon any app as a scratchpad overlay on Hyprland
 
-WIZARD MODE (interactive, recommended for beginners):
-  hyprsummon pick                     Focus a window, name it, bind it — done
-                                      Walks you through the whole setup step by step.
+WIZARD MODE (recommended):
+  hyprsummon pick                     Focus a window → name it → bind it → done
+                                       • Detects window class automatically
+                                       • Finds launch command from .desktop files
+                                       • Asks if you want auto-launch on toggle
+                                       • Detects existing entries (no duplicates)
 
-COMMAND MODE (direct, for power users):
+COMMAND MODE:
   hyprsummon <app>                    Toggle app (show/hide)
   hyprsummon dismiss                  Close active special workspace
-                                      Default keybind: Super+Escape (via apply)
-  hyprsummon scan                     Auto-detect all Chromium PWAs at once
-  hyprsummon bind <app> '<key>'       Assign a keybind
+  hyprsummon scan                     Auto-detect all Chromium PWAs
+  hyprsummon bind <app> '<key>'       Assign a keybind (auto-resolves conflicts)
   hyprsummon apply                    Write Hyprland configs + reload
-  hyprsummon list                     Show registered apps and keybinds
+  hyprsummon list                     Show apps, keybinds, and autolaunch status
   hyprsummon status                   Show running/stopped state of each app
-  hyprsummon add <name> <class> [cmd] [wait]
-                                      Register an app manually
+  hyprsummon add <name> <class> [wait] [autolaunch] [cmd]
+                                       Register an app manually
+                                       • wait: max seconds to wait for launch (default: 1)
+                                       • autolaunch: 'yes' or 'no' (default: no)
+                                       • cmd: auto-detected from .desktop if omitted
   hyprsummon remove <name>            Unregister an app
 
-QUICK START (wizard):
-  1. Open the app you want to summon
-  2. hyprsummon pick
-  3. That's it
+QUICK START:
+  1. Open the app you want         (or install a site as PWA in Chromium)
+  2. hyprsummon pick                (follow the wizard)
+  3. Done — use your keybind
 
-QUICK START (commands):
-  1. Install a site as app in Chromium (⋮ → "Install page as app")
-  2. hyprsummon scan
-  3. hyprsummon bind youtube 'Super, Y'
-  4. hyprsummon apply
+AUTO-LAUNCH:
+  By default, keybinds only toggle the special workspace.
+  With autolaunch, the keybind also starts the app if not running.
+
+  Enable via wizard:  hyprsummon pick  →  answer 'y' to auto-launch
+  Enable via command: hyprsummon add <name> <class> <wait> yes
+
+  Lock mechanism prevents multiple instances on fast key presses.
+
+EXAMPLES:
+  hyprsummon add zen zen 15 yes               Zen Browser, auto-launch
+  hyprsummon add spotify Spotify 5             Spotify, toggle only
+  hyprsummon add steam steam 5 yes "steam -silent"
+                                               Custom launch command
 
 DISMISS KEYBIND:
-  The dismiss key closes whatever special workspace is open.
-  Default: Super+Escape. To change it:
-    echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
-    hyprsummon apply
+  Closes whatever special workspace is open. Default: Super+Escape
+  Change: echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
+          hyprsummon apply
 
 REQUIRES: hyprland, jq, bash >= 4.0
 EOF
