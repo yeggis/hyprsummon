@@ -100,8 +100,8 @@ For bulk setup or scripting. Good for Chromium PWAs since `scan` finds them all 
 
 ```bash
 hyprsummon scan                        # auto-detects all installed PWAs
-hyprsummon bind youtube 'Super, Y'     # assign keybinds
-hyprsummon bind chatgpt 'Super+Shift, 1'
+hyprsummon bind youtube Super, Y       # assign keybinds
+hyprsummon bind chatgpt Super+Shift, 1
 hyprsummon apply                       # writes configs, reloads Hyprland
 ```
 
@@ -126,10 +126,10 @@ hyprsummon pick
 
 **Enable via command:**
 ```bash
-hyprsummon add spotify Spotify 5 yes
-#                      │       │  └── autolaunch: yes
-#                      │       └───── max wait: 5 seconds
-#                      └───────────── window class
+hyprsummon add spotify Spotify yes 5
+#                      │       │   └── max wait: 5 seconds
+#                      │       └────── autolaunch: yes
+#                      └────────────── window class
 ```
 
 ## Adding non-PWA apps
@@ -141,20 +141,20 @@ Two ways:
 **Manually** — you only need the name and window class:
 
 ```bash
-hyprsummon add zen zen 15 yes
-hyprsummon add steam steam 5 yes
-hyprsummon bind zen 'Super, F'
-hyprsummon bind steam 'Super+Shift, G'
+hyprsummon add zen zen yes 15
+hyprsummon add steam steam yes 5
+hyprsummon bind zen Super, F
+hyprsummon bind steam Super+Shift, G
 hyprsummon apply
 ```
 
 The launch command is auto-detected from `.desktop` files. If you need a custom command (rare), pass it as the last parameter:
 
 ```bash
-hyprsummon add zen zen 15 yes "zen-browser --private-window"
+hyprsummon add zen zen yes 15 "zen-browser --private-window"
 ```
 
-Format: `hyprsummon add <name> <class> [wait] [autolaunch] [launch_cmd]`
+Format: `hyprsummon add <name> <class> [autolaunch] [wait] [launch_cmd]`
 
 > **Finding the window class:** Open the app and run `hyprctl activewindow -j | jq -r '.class'`
 > Or just use `hyprsummon pick` — it does this for you.
@@ -169,9 +169,9 @@ Format: `hyprsummon add <name> <class> [wait] [autolaunch] [launch_cmd]`
 | `hyprsummon scan` | Auto-detect all Chromium PWAs |
 | `hyprsummon list` | List registered apps, keybinds, and autolaunch status |
 | `hyprsummon status` | Show running/stopped state |
-| `hyprsummon bind <app> '<key>'` | Assign a keybind (removes conflicts) |
+| `hyprsummon bind <app> <key>` | Assign a keybind (no quotes needed) |
 | `hyprsummon apply` | Write Hyprland configs + reload |
-| `hyprsummon add <n> <class> [wait] [autolaunch] [cmd]` | Register an app manually |
+| `hyprsummon add <n> <class> [autolaunch] [wait] [cmd]` | Register an app manually |
 | `hyprsummon remove <name>` | Unregister an app |
 
 ## The dismiss key
@@ -255,7 +255,7 @@ animation = specialWorkspace, 1, 3, default, slidevert
 Firefox doesn't do PWAs natively. Use `hyprsummon pick` or `hyprsummon add` with the correct window class.
 
 **Can I use autolaunch without pick?**
-Yes: `hyprsummon add <name> <class> <wait> yes`. The launch command is auto-detected.
+Yes: `hyprsummon add <name> <class> yes`. The launch command is auto-detected.
 
 ## License
 

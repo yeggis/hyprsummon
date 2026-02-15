@@ -359,7 +359,7 @@ cmd_pick() {
     read -r chosen_al
     [[ "$chosen_al" =~ ^[Yy] ]] && chosen_al="yes" || chosen_al="no"
 
-    cmd_add "$chosen_name" "$class" 2 "$chosen_al" "$launch_cmd"
+    cmd_add "$chosen_name" "$class" "$chosen_al" 2 "$launch_cmd"
 
     echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
     read -r chosen_key
@@ -382,10 +382,10 @@ cmd_pick() {
 # ---------------------------------------------------------------------------
 
 cmd_add() {
-    local name="${1:?Usage: hyprsummon add <name> <class> [max_wait] [autolaunch] [launch_cmd]}"
+    local name="${1:?Usage: hyprsummon add <name> <class> [autolaunch] [wait] [cmd]}"
     local class="${2:?window class required}"
-    local wait="${3:-1}"
-    local autolaunch="${4:-no}"
+    local autolaunch="${3:-no}"
+    local wait="${4:-1}"
     local cmd="${5:-}"
 
     init_conf
@@ -438,8 +438,9 @@ cmd_remove() {
 # ---------------------------------------------------------------------------
 
 cmd_bind() {
-    local name="${1:?Usage: hyprsummon bind <app> '<key>'}"
-    local key="${2:?Example: hyprsummon bind youtube 'Super, Y'}"
+    local name="${1:?Usage: hyprsummon bind <app> <key>}"
+    shift
+    local key="${*:?Example: hyprsummon bind youtube Super, Y}"
     name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
 
     init_conf
@@ -549,52 +550,38 @@ cmd_help() {
     cat <<'EOF'
 hyprsummon — summon any app as a scratchpad overlay on Hyprland
 
-WIZARD MODE (recommended):
-  hyprsummon pick                     Focus a window → name it → bind it → done
-                                       • Detects window class automatically
-                                       • Finds launch command from .desktop files
-                                       • Asks if you want auto-launch on toggle
-                                       • Detects existing entries (no duplicates)
+WIZARD MODE:
+  1. Open the app you want
+  2. hyprsummon pick
+  3. Follow the prompts — done
 
 COMMAND MODE:
+  hyprsummon scan                     Auto-detect all Chromium PWAs
+  hyprsummon add <name> <class> [autolaunch] [wait] [cmd]
+                                      Register an app (cmd auto-detected)
+  hyprsummon bind <app> <key>         Assign a keybind
+  hyprsummon apply                    Write configs + reload Hyprland
   hyprsummon <app>                    Toggle app (show/hide)
   hyprsummon dismiss                  Close active special workspace
-  hyprsummon scan                     Auto-detect all Chromium PWAs
-  hyprsummon bind <app> '<key>'       Assign a keybind (auto-resolves conflicts)
-  hyprsummon apply                    Write Hyprland configs + reload
-  hyprsummon list                     Show apps, keybinds, and autolaunch status
-  hyprsummon status                   Show running/stopped state of each app
-  hyprsummon add <name> <class> [wait] [autolaunch] [cmd]
-                                       Register an app manually
-                                       • wait: max seconds to wait for launch (default: 1)
-                                       • autolaunch: 'yes' or 'no' (default: no)
-                                       • cmd: auto-detected from .desktop if omitted
+  hyprsummon list                     Show registered apps
+  hyprsummon status                   Show running/stopped state
   hyprsummon remove <name>            Unregister an app
 
-QUICK START:
-  1. Open the app you want         (or install a site as PWA in Chromium)
-  2. hyprsummon pick                (follow the wizard)
-  3. Done — use your keybind
-
-AUTO-LAUNCH:
-  By default, keybinds only toggle the special workspace.
-  With autolaunch, the keybind also starts the app if not running.
-
-  Enable via wizard:  hyprsummon pick  →  answer 'y' to auto-launch
-  Enable via command: hyprsummon add <name> <class> <wait> yes
-
-  Lock mechanism prevents multiple instances on fast key presses.
-
 EXAMPLES:
-  hyprsummon add zen zen 15 yes               Zen Browser, auto-launch
-  hyprsummon add spotify Spotify 5             Spotify, toggle only
-  hyprsummon add steam steam 5 yes "steam -silent"
-                                               Custom launch command
+  hyprsummon add zen zen              just register
+  hyprsummon add zen zen yes          register + auto-launch
+  hyprsummon add zen zen yes 15       register + auto-launch + custom wait
+  hyprsummon bind zen Super, F        no quotes needed
+  hyprsummon apply
 
-DISMISS KEYBIND:
-  Closes whatever special workspace is open. Default: Super+Escape
-  Change: echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
-          hyprsummon apply
+  hyprsummon scan                     find all PWAs
+  hyprsummon bind youtube Super, Y
+  hyprsummon bind chatgpt Super+Shift, 1
+  hyprsummon apply
+
+DISMISS KEY:
+  Default: Super+Escape. Change with:
+  echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
 
 REQUIRES: hyprland, jq, bash >= 4.0
 EOF

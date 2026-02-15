@@ -100,8 +100,8 @@ Toplu kurulum veya script'ler için. `scan` tüm PWA'ları tek seferde bulur:
 
 ```bash
 hyprsummon scan                        # kurulu tüm PWA'ları bul
-hyprsummon bind youtube 'Super, Y'     # kısayol ata
-hyprsummon bind chatgpt 'Super+Shift, 1'
+hyprsummon bind youtube Super, Y       # kısayol ata
+hyprsummon bind chatgpt Super+Shift, 1
 hyprsummon apply                       # config yaz, Hyprland'ı yenile
 ```
 
@@ -126,10 +126,10 @@ hyprsummon pick
 
 **Komut ile etkinleştirme:**
 ```bash
-hyprsummon add spotify Spotify 5 yes
-#                      │       │  └── autolaunch: evet
-#                      │       └───── max bekleme: 5 saniye
-#                      └───────────── pencere sınıfı
+hyprsummon add spotify Spotify yes 5
+#                      │       │   └── max bekleme: 5 saniye
+#                      │       └────── autolaunch: evet
+#                      └────────────── pencere sınıfı
 ```
 
 ## PWA olmayan uygulamalar
@@ -141,20 +141,20 @@ hyprsummon add spotify Spotify 5 yes
 **Manuel** — sadece isim ve pencere sınıfı yeter:
 
 ```bash
-hyprsummon add zen zen 15 yes
-hyprsummon add steam steam 5 yes
-hyprsummon bind zen 'Super, F'
-hyprsummon bind steam 'Super+Shift, G'
+hyprsummon add zen zen yes 15
+hyprsummon add steam steam yes 5
+hyprsummon bind zen Super, F
+hyprsummon bind steam Super+Shift, G
 hyprsummon apply
 ```
 
 Başlatma komutu `.desktop` dosyalarından otomatik algılanır. Özel bir komut gerekiyorsa (nadir durum) son parametre olarak verin:
 
 ```bash
-hyprsummon add zen zen 15 yes "zen-browser --private-window"
+hyprsummon add zen zen yes 15 "zen-browser --private-window"
 ```
 
-Format: `hyprsummon add <isim> <sınıf> [bekleme] [autolaunch] [komut]`
+Format: `hyprsummon add <isim> <sınıf> [autolaunch] [bekleme] [komut]`
 
 > **Pencere sınıfını bulmak:** Uygulamayı açın ve çalıştırın: `hyprctl activewindow -j | jq -r '.class'`
 > Ya da `hyprsummon pick` kullanın — bunu sizin yerinize yapar.
@@ -169,9 +169,9 @@ Format: `hyprsummon add <isim> <sınıf> [bekleme] [autolaunch] [komut]`
 | `hyprsummon scan` | Tüm Chromium PWA'larını bul |
 | `hyprsummon list` | Kayıtlı uygulamaları, kısayolları ve autolaunch durumunu göster |
 | `hyprsummon status` | Çalışan/durmuş durumları göster |
-| `hyprsummon bind <app> '<tuş>'` | Kısayol ata (çakışmaları otomatik temizler) |
+| `hyprsummon bind <app> <tuş>` | Kısayol ata (tırnak gerekmez) |
 | `hyprsummon apply` | Config yaz + Hyprland'ı yenile |
-| `hyprsummon add <ad> <class> [wait] [autolaunch] [cmd]` | Manuel uygulama ekle |
+| `hyprsummon add <ad> <class> [autolaunch] [wait] [cmd]` | Manuel uygulama ekle |
 | `hyprsummon remove <ad>` | Uygulamayı kaldır |
 
 ## Dismiss tuşu
@@ -256,7 +256,7 @@ animation = specialWorkspace, 1, 3, default, slidevert
 Firefox yerel olarak PWA desteklemez. `hyprsummon pick` veya `hyprsummon add` ile doğru pencere sınıfını kullanın.
 
 **Otomatik başlatmayı pick olmadan kullanabilir miyim?**
-Evet: `hyprsummon add <isim> <sınıf> <bekleme> yes`. Başlatma komutu otomatik algılanır.
+Evet: `hyprsummon add <isim> <sınıf> yes`. Başlatma komutu otomatik algılanır.
 
 ## Lisans
 
