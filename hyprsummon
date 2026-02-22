@@ -371,11 +371,11 @@ cmd_pick() {
 
     local existing_bind; existing_bind=$(get_bind "$chosen_name" 2>/dev/null || true)
     if [[ -n "$existing_bind" ]]; then
-        echo -ne "${BOLD}Keybind${RST} [${existing_bind}] (leave empty to keep, '-' to clear): "
+        echo -ne "${BOLD}Keybind${RST} [${existing_bind}] (leave empty to keep, '-' to clear): " > /dev/tty
     else
-        echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
+        echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): " > /dev/tty
     fi
-    read -r chosen_key
+    read -r chosen_key < /dev/tty
     if [[ "$chosen_key" == "-" ]]; then
         HYPRSUMMON_QUIET=1 cmd_bind "$chosen_name" ""
     elif [[ -n "$chosen_key" ]]; then
@@ -434,7 +434,7 @@ cmd_add() {
         echo "${name}|${class}|${cmd}|${wait}||${autolaunch}" >> "$CONF_FILE"
         msg "'${name}' added."
     fi
-    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}"
+    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}" || true
 }
 
 cmd_remove() {
@@ -457,7 +457,24 @@ cmd_remove() {
 cmd_bind() {
     local name="${1:?Usage: hyprsummon bind <app> <key>}"
     shift
-    local key="${*:?Example: hyprsummon bind youtube Super, Y}"
+    local key="${*:-}"
+    if [[ -z "$key" ]]; then
+        # called with empty key: clear the binding
+        name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+        init_conf
+        grep -q "^${name}|" "$CONF_FILE" 2>/dev/null \
+            || die "'${name}' not found."
+        local line app_class app_cmd app_wait app_al
+        line=$(grep "^${name}|" "$CONF_FILE")
+        app_class=$(echo "$line" | cut -d'|' -f2)
+        app_cmd=$(echo "$line" | cut -d'|' -f3)
+        app_wait=$(echo "$line" | cut -d'|' -f4)
+        app_al=$(echo "$line" | cut -d'|' -f6)
+        sed -i "/^${name}|/d" "$CONF_FILE"
+        echo "${name}|${app_class}|${app_cmd}|${app_wait}||${app_al}" >> "$CONF_FILE"
+        msg "${BOLD}${name}${RST} keybind cleared."
+        return 0
+    fi
     name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
 
     init_conf
@@ -490,7 +507,7 @@ cmd_bind() {
     echo "${name}|${app_class}|${app_cmd}|${app_wait}|${key}|${app_al}" >> "$CONF_FILE"
 
     msg "${BOLD}${name}${RST} → ${YELLOW}${key}${RST}"
-    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}"
+    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}" || true
 }
 
 # ---------------------------------------------------------------------------
