@@ -11,7 +11,7 @@ DESKTOP_DIRS=("$HOME/.local/share/applications" "/usr/share/applications")
 DISMISS_KEY="Super, Escape"
 
 RED='\033[91m'  GREEN='\033[92m'  YELLOW='\033[93m'
-CYAN='\033[96m'  BOLD='\033[1m'  RST='\033[0m'
+CYAN='\033[96m'  BOLD='\033[1m'  DIM='\033[2m'  RST='\033[0m'
 
 msg()  { echo -e "${GREEN}>>>${RST} $*"; }
 warn() { echo -e "${YELLOW}>>>${RST} $*" >&2; }
@@ -369,9 +369,16 @@ cmd_pick() {
 
     HYPRSUMMON_QUIET=1 cmd_add "$chosen_name" "$class" "$chosen_al" 2 "$launch_cmd"
 
-    echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
+    local existing_bind; existing_bind=$(get_bind "$chosen_name" 2>/dev/null || true)
+    if [[ -n "$existing_bind" ]]; then
+        echo -ne "${BOLD}Keybind${RST} [${existing_bind}] (leave empty to keep, '-' to clear): "
+    else
+        echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
+    fi
     read -r chosen_key
-    if [[ -n "$chosen_key" ]]; then
+    if [[ "$chosen_key" == "-" ]]; then
+        HYPRSUMMON_QUIET=1 cmd_bind "$chosen_name" ""
+    elif [[ -n "$chosen_key" ]]; then
         HYPRSUMMON_QUIET=1 cmd_bind "$chosen_name" "$chosen_key"
     fi
 
