@@ -185,6 +185,20 @@ echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
 hyprsummon apply
 ```
 
+## hyprscrolling desteği
+
+[hyprscrolling](https://hypr.land/Plugins/hyprscrolling) eklentisini kullanıyorsanız (`general:layout = scrolling`), hyprsummon bunu otomatik algılar ve davranışını buna göre ayarlar:
+
+| Durum | Standart düzen | scrolling düzeni |
+|---|---|---|
+| Uygulama zaten special ws'de | `togglespecialworkspace` | `togglespecialworkspace` |
+| **Uygulama normal ws'de çalışıyor** | `movetoworkspacesilent` | **`movecoltoworkspace` + `fit active`** |
+| Uygulama çalışmıyor | `togglespecialworkspace` | `togglespecialworkspace` |
+
+`scrolling` aktifken bir pencereyi scratchpad'e almak (kidnap) için `movecoltoworkspace` kullanılır — sütun yapısı bozulmaz ve pencere ekrana otomatik sığdırılır. Tüm diğer durumlar aynı kalır.
+
+Hiçbir yapılandırma gerekmez — hem `scrolling` hem de `dwindle`/`master` düzenlerinde sorunsuz çalışır.
+
 ## Nasıl çalışır?
 
 `hyprsummon youtube` çalıştırdığınızda:

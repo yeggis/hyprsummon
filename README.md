@@ -185,6 +185,20 @@ echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
 hyprsummon apply
 ```
 
+## hyprscrolling support
+
+If you use the [hyprscrolling](https://hypr.land/Plugins/hyprscrolling) plugin (`general:layout = scrolling`), hyprsummon detects it automatically and adapts its behavior:
+
+| Scenario | Standard layout | scrolling layout |
+|---|---|---|
+| App already in special ws | `togglespecialworkspace` | `togglespecialworkspace` |
+| **App running on regular ws** | `movetoworkspacesilent` | **`movecoltoworkspace` + `fit active`** |
+| App not running | `togglespecialworkspace` | `togglespecialworkspace` |
+
+When `scrolling` is active, "kidnapping" a window into a scratchpad uses `movecoltoworkspace` to preserve column integrity and automatically fits it to screen width. All other scenarios remain identical.
+
+No configuration needed — it works transparently on both `scrolling` and `dwindle`/`master` layouts.
+
 ## How it works
 
 When you run `hyprsummon youtube`:

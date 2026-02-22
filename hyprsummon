@@ -168,7 +168,15 @@ cmd_toggle() {
 
     elif [[ "$running" == "yes" ]]; then
         # running on a regular workspace — kidnap it into special
-        hyprctl dispatch movetoworkspacesilent "special:${app},class:${class}"
+        # if hyprscrolling is active, use column-aware move to preserve layout integrity
+        local layout; layout=$(hyprctl getoption general:layout -j | jq -r '.str')
+        if [[ "$layout" == "scrolling" ]]; then
+            hyprctl dispatch focuswindow "class:${class}"
+            hyprctl dispatch layoutmsg movecoltoworkspace "special:${app}"
+            hyprctl dispatch layoutmsg fit active
+        else
+            hyprctl dispatch movetoworkspacesilent "special:${app},class:${class}"
+        fi
         hyprctl dispatch togglespecialworkspace "$app"
         hyprctl dispatch focuswindow "class:${class}"
 
@@ -359,12 +367,12 @@ cmd_pick() {
     read -r chosen_al
     [[ "$chosen_al" =~ ^[Yy] ]] && chosen_al="yes" || chosen_al="no"
 
-    cmd_add "$chosen_name" "$class" "$chosen_al" 2 "$launch_cmd"
+    HYPRSUMMON_QUIET=1 cmd_add "$chosen_name" "$class" "$chosen_al" 2 "$launch_cmd"
 
     echo -ne "${BOLD}Keybind${RST} (e.g. Super, Z / leave empty to skip): "
     read -r chosen_key
     if [[ -n "$chosen_key" ]]; then
-        cmd_bind "$chosen_name" "$chosen_key"
+        HYPRSUMMON_QUIET=1 cmd_bind "$chosen_name" "$chosen_key"
     fi
 
     echo ""
@@ -419,6 +427,7 @@ cmd_add() {
         echo "${name}|${class}|${cmd}|${wait}||${autolaunch}" >> "$CONF_FILE"
         msg "'${name}' added."
     fi
+    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}"
 }
 
 cmd_remove() {
@@ -428,6 +437,7 @@ cmd_remove() {
     if grep -q "^${name}|" "$CONF_FILE" 2>/dev/null; then
         sed -i "/^${name}|/d" "$CONF_FILE"
         msg "'${name}' removed."
+        echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}"
     else
         warn "'${name}' not found."
     fi
@@ -473,6 +483,7 @@ cmd_bind() {
     echo "${name}|${app_class}|${app_cmd}|${app_wait}|${key}|${app_al}" >> "$CONF_FILE"
 
     msg "${BOLD}${name}${RST} → ${YELLOW}${key}${RST}"
+    [[ -z "${HYPRSUMMON_QUIET:-}" ]] && echo -e "  ${DIM}Run 'hyprsummon apply' to activate.${RST}"
 }
 
 # ---------------------------------------------------------------------------
@@ -584,6 +595,11 @@ DISMISS KEY:
   echo 'dismiss_key=Super+Shift, Escape' > ~/.config/hyprsummon/settings.conf
 
 REQUIRES: hyprland, jq, bash >= 4.0
+
+HYPRSCROLLING PLUGIN SUPPORT:
+  When general:layout = scrolling, hyprsummon automatically
+  uses column-aware move (movecoltoworkspace) for better layout
+  integrity. Works transparently with dwindle and other layouts.
 EOF
 }
 
