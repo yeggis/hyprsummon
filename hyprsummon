@@ -382,8 +382,7 @@ cmd_pick() {
         HYPRSUMMON_QUIET=1 cmd_bind "$chosen_name" "$chosen_key"
     fi
 
-    echo ""
-    echo -ne "${BOLD}Apply now?${RST} [Y/n]: "
+    echo -ne "\n${BOLD}Apply now?${RST} [Y/n]: "
     read -r do_apply
     if [[ -z "$do_apply" || "$do_apply" =~ ^[Yy] ]]; then
         cmd_apply
